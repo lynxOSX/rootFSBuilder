@@ -1,0 +1,24 @@
+# lynxOS rootfs package set — pacstrapped into the image by `./lynx-build install`.
+# One package per line; lines starting with # are comments.
+# Keep this lean: the lynxOS DE components (SystemUIServer, Finder, Dock) are
+# not packaged yet and will be added here as they land.
+
+# Arch base system
+base
+linux
+linux-firmware
+
+# Plumbing
+networkmanager
+dbus
+sudo
+
+# X11 + window manager base for the lynxOS desktop
+xorg-server
+xorg-xinit
+openbox
+xterm
+
+# Console basics
+nano
+less
