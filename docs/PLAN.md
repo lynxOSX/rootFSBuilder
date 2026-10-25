@@ -45,6 +45,23 @@ tested before anything installs it for real (the bootstrap rootfs still has
 no kernel; the installed target does — `linux` is in `packages.txt` — so an
 installed rootfs can be direct-kernel-booted from its own `vmlinuz`).
 
+## Rootful mode (--rootful, 2026-10 addition)
+
+proot paints a fake view of root and that has been fine so far, but an
+install onto real media is exactly where the difference can bite (weird
+setuid/xattr corner cases, anything keying on "is this really root for
+real"). So the same pipeline can now run as root, without proot:
+
+- pacman runs under a real `chroot` into the bootstrap, with the mounts
+  proot was faking for real: `/proc` (procfs), `/sys` and `/dev` (binds),
+  the host `resolv.conf`, and the product rootfs bind-mounted at `/target`
+  — the same layout, unmounted as soon as pacman is done.
+- Requires root (`sudo ./lynx-build --rootful all`); everything outside the
+  pacman step is the same code, so both modes should produce the same
+  reproducible tarball — owners are pinned 0:0 in the bundle either way.
+- Rootless stays the default: the builder is *designed* to never need root,
+  that is the point; --rootful is the escape hatch, not the road.
+
 ## Filesystem layout
 
 - macOS-style names are real directories on top of FHS (as on a 10.6 root):

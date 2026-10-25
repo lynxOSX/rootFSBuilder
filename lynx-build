@@ -2,15 +2,25 @@
 """lynxOS rootFSBuilder — build a lynxOS root filesystem tarball from Arch packages.
 
 Usage:
-  ./lynx-build fetch     download + verify the Arch bootstrap tarball
-  ./lynx-build rootfs    unpack it (the bootstrap is pacman's tool env)
-  ./lynx-build install   pacstrap packages.txt into work/target + apply skeleton
-  ./lynx-build bundle    reproducible tar.gz into out/
-  ./lynx-build all       fetch + rootfs + install + bundle
-  ./lynx-build clean     delete work/ (keeps the bootstrap tarball + release pin)
+  ./lynx-build [--rootful] fetch     download + verify the Arch bootstrap tarball
+  ./lynx-build [--rootful] rootfs    unpack it (the bootstrap is pacman's tool env)
+  ./lynx-build [--rootful] install   pacstrap packages.txt into work/target + skeleton
+  ./lynx-build [--rootful] bundle    reproducible tar.gz into out/
+  ./lynx-build [--rootful] all       fetch + rootfs + install + bundle
+  ./lynx-build [--rootful] clean     delete work/ (keeps the bootstrap tarball + pin)
+  ./lynx-build [-h | --help]
+
+Default is rootless: pacman runs inside the bootstrap rootfs under proot.
+With --rootful (or ROOTFUL=1) the same pipeline runs as root instead: pacman
+runs under a real chroot with bind mounts (proc/sys/dev, target, resolv.conf),
+no proot — for when the rootless view of the filesystem is not enough (real
+media installs, cases proot mis-models). Requires root and chroot/mount;
+proot is not used in that mode.
 
 Environment overrides (all optional): MIRROR, ISO_DATE, BOOTSTRAP_SHA, WORK, OUT.
-Requires host tools: curl, zstd, tar (GNU), gzip, sha256sum, proot.
+Requires host tools: curl, zstd, tar (GNU), gzip, sha256sum, and proot
+(rootless) or be root with chroot/mount/umount (rootful). --rootful also
+needs gpg for the keyring, as rootless does.
 """
 
 import hashlib
@@ -32,6 +42,7 @@ TARGET = WORK / "target"
 MIRROR = os.environ.get("MIRROR")
 ISO_DATE = os.environ.get("ISO_DATE")
 BOOTSTRAP_SHA = os.environ.get("BOOTSTRAP_SHA")
+ROOTFUL = os.environ.get("ROOTFUL") == "1"
 
 for envf in (WORK / "release.env", HERE / "release.env"):
     if envf.is_file():
@@ -108,7 +119,14 @@ def require_host_tools():
     need_tool("zstd", "apk add zstd")
     need_tool("tar", "apk add tar (GNU)")
     need_tool("gzip", "busybox")
-    need_tool("proot", "apk add proot")
+    if ROOTFUL:
+        if os.geteuid() != 0:
+            die("--rootful must run as root: sudo ./lynx-build ...")
+        need_tool("chroot", "coreutils")
+        need_tool("mount", "util-linux (or busybox)")
+        need_tool("umount", "util-linux (or busybox)")
+    else:
+        need_tool("proot", "apk add proot")
 
 
 def package_list():
@@ -129,10 +147,68 @@ def default_env():
 
 
 def in_bootstrap(args, extra_binds=()):
+    """Run args inside the bootstrap rootfs — the pacman tool environment.
+
+    Rootless (default): under proot (no root needed, fake root view).
+    Rootful (--rootful): under a real chroot, as root, with the mounts
+    pacman wants (proc, sys, dev, resolv) and the requested binds; proot
+    is not involved.
+    """
+    if ROOTFUL:
+        mounts = mount_chroot(extra_binds)
+        try:
+            run(
+                ["chroot", str(BOOTSTRAP_ROOT), "/usr/bin/env", "-i",
+                 f"HOME={default_env()['HOME']}",
+                 f"PATH={default_env()['PATH']}",
+                 f"TERM={default_env()['TERM']}",
+                 ] + list(args),
+                env={"PATH": "/usr/bin:/bin"},
+            )
+        finally:
+            umount_chroot(mounts)
+        return
     cmd = ["proot", "-0", "-R", str(BOOTSTRAP_ROOT), "-w", "/"]
     for host, guest in extra_binds:
         cmd += ["-b", f"{host}:{guest}"]
     return run(cmd + list(args), env=default_env())
+
+
+def mount_chroot(extra_binds):
+    """Bind what the chroot needs in; return the mountpoints, in mount
+    order, for umount_chroot to unwind in reverse."""
+    root = Path(BOOTSTRAP_ROOT)
+    mounts = []
+
+    def mount(*cmd):
+        run(cmd, msg="mount")
+
+    p = root / "proc"
+    p.mkdir(exist_ok=True)
+    mount("mount", "-t", "proc", "/proc", str(p))
+    mounts.append(p)
+    for node in ("/sys", "/dev"):
+        p = root / node.lstrip("/")
+        p.mkdir(exist_ok=True)
+        mount("mount", "--bind", node, str(p))
+        mounts.append(p)
+    p = root / "etc" / "resolv.conf"
+    if os.path.isfile("/etc/resolv.conf"):
+        if not p.exists() or p.is_symlink():
+            p.write_text("")
+        mount("mount", "--bind", "/etc/resolv.conf", str(p))
+        mounts.append(p)
+    for host, guest in extra_binds:
+        p = root / guest.lstrip("/")
+        p.mkdir(parents=True, exist_ok=True)
+        mount("mount", "--bind", str(host), str(p))
+        mounts.append(p)
+    return mounts
+
+
+def umount_chroot(mounts):
+    for p in reversed(mounts):
+        run(["umount", str(p)], quit_on_error=False, msg="umount")
 
 
 def pin_mirror(root):
@@ -460,10 +536,14 @@ def do_clean():
 
 
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] in ("-h", "--help"):
+    global ROOTFUL
+    args = [a for a in sys.argv[1:] if a != "--rootful"]
+    if "--rootful" in sys.argv[1:]:
+        ROOTFUL = True
+    if len(args) != 1 or args[0] in ("-h", "--help"):
         print(__doc__.strip())
-        sys.exit(0 if len(sys.argv) == 2 else 2)
-    step = sys.argv[1]
+        sys.exit(0 if len(args) == 1 else 2)
+    step = args[0]
     steps = {
         "fetch": do_fetch,
         "rootfs": do_rootfs,
