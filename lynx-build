@@ -88,14 +88,21 @@ def run(cmd, cwd=None, capture=False, quit_on_error=True, msg=None, env=None):
     if msg:
         shown = f"{msg}: {shown}"
     print(f"\033[0;36m  {shown}\033[0m", file=sys.stderr, flush=True)
+    # Resolve cmd[0] against the *host* PATH: when a restricted env= is
+    # passed (the chroot call), subprocess would otherwise look the program
+    # up in the child's PATH and fail with FileNotFoundError.
+    prog = shutil.which(str(cmd[0]))
+    if prog is None:
+        die(f"'{cmd[0]}' not found on the host")
+    argv = [prog] + [str(c) for c in cmd[1:]]
     try:
         if capture:
             r = subprocess.run(
-                [str(c) for c in cmd], cwd=cwd, env=env,
+                argv, cwd=cwd, env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             )
         else:
-            r = subprocess.run([str(c) for c in cmd], cwd=cwd, env=env)
+            r = subprocess.run(argv, cwd=cwd, env=env)
     except FileNotFoundError:
         die(f"'{cmd[0]}' not found on the host")
     if r.returncode != 0:
@@ -113,7 +120,19 @@ def need_tool(name, hint=""):
         die(f"'{name}' not found on the host{hint}")
 
 
+def ensure_sbin_path():
+    """Rootful tools (chroot, mount) can live only in */sbin, which minimal
+    non-login shells (e.g. over ssh) leave off PATH."""
+    have = os.environ.get("PATH", "").split(os.pathsep)
+    add = [d for d in ("/usr/local/sbin", "/usr/sbin", "/sbin")
+           if os.path.isdir(d) and d not in have]
+    if add:
+        os.environ["PATH"] = os.pathsep.join(add) + os.pathsep + \
+            os.environ.get("PATH", "")
+
+
 def require_host_tools():
+    ensure_sbin_path()
     need_tool("curl", "apk add curl")
     need_tool("sha256sum", "coreutils")
     need_tool("zstd", "apk add zstd")
@@ -341,6 +360,13 @@ def build_pacman_conf():
             out.append(line[1:])
         elif line.startswith("#DisableSandboxSyscalls"):
             out.append(line[1:])
+        elif ROOTFUL and line.startswith("CheckSpace"):
+            # pacman's approximate disk-space check needs a mount table that
+            # matches its view of the fs; under a real chroot with the host's
+            # /proc bind-mounted in, it cannot map the bind-mounted target
+            # and rejects every transaction ("could not determine cachedir
+            # mount point"). The builder is root and owns the disk here.
+            out.append("#" + line)
         else:
             out.append(line)
     newconf = BOOTSTRAP_ROOT / "etc" / "pacman.conf.lynxbuild"
@@ -426,6 +452,10 @@ def do_install():
 
     TARGET.mkdir(parents=True)
     (TARGET / "var" / "lib" / "pacman").mkdir(parents=True, exist_ok=True)
+    # pacman expects its cachedir to exist inside -r <root>; without it the
+    # transaction dies with a misleading "not enough free disk space"
+    (TARGET / "var" / "cache" / "pacman" / "pkg").mkdir(parents=True,
+                                                        exist_ok=True)
     do_skel_dirs()
 
     log("Preparing pacman keyring (host-built, into bootstrap)")
