@@ -1,283 +1,485 @@
-#!/bin/sh
-# lynxOS rootFSBuilder — build a lynxOS root filesystem tarball from Arch packages.
-#
-# Requires: qemu-system-x86_64, qemu-img, zstd, tar, curl, 7z, sha256sum, ssh.
-# The build runs in a disposable QEMU VM so the host (any distro) is never touched.
-#
-# Usage:
-#   ./lynx-build fetch     download + verify the Arch bootstrap tarball
-#   ./lynx-build rootfs    unpack it and apply the lynxOS skeleton
-#   ./lynx-build vm-up     boot the build VM (rootfs on a 20G scratch disk)
-#   ./lynx-build vm <cmd>  run <sh -c> inside the VM
-#   ./lynx-build install   pacstrap the base system into /target inside the VM
-#   ./lynx-build bundle    tar the finished rootfs into out/lynxos-rootfs-<date>-x86_64.tar.gz
-#   ./lynx-build all       fetch + rootfs + install + bundle
-#   ./lynx-build vm-down   stop the VM
-#   ./lynx-build clean     stop the VM, delete work/
-#
-# Environment overrides (all optional):
-#   MIRROR      Arch mirror   (default: https://geo.mirror.pkgbuild.com)
-#   ISO_DATE    Arch snapshot (default: latest; pinned by `fetch` into work/release.env)
-#   BOOTSTRAP   bootstrap tarball sha256 (default: pinned by `fetch`)
-#   WORK        work dir      (default: ./work)
-#   OUT         output dir    (default: ./out)
-#   VMCPUS      VM cpus       (default: 2)
-#   MEMORY      VM ram        (default: 1G)
-#   SCRATCH     VM scratch disk size (default: 20G)
-#   ECHO 0      don't print each command
+#!/usr/bin/env python3
+"""lynxOS rootFSBuilder — build a lynxOS root filesystem tarball from Arch packages.
 
-set -eu
+Usage:
+  ./lynx-build fetch     download + verify the Arch bootstrap tarball
+  ./lynx-build rootfs    unpack it (the bootstrap is pacman's tool env)
+  ./lynx-build install   pacstrap packages.txt into work/target + apply skeleton
+  ./lynx-build bundle    reproducible tar.gz into out/
+  ./lynx-build all       fetch + rootfs + install + bundle
+  ./lynx-build clean     delete work/ (keeps the bootstrap tarball + release pin)
 
-HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-cd "$HERE"
+Environment overrides (all optional): MIRROR, ISO_DATE, BOOTSTRAP_SHA, WORK, OUT.
+Requires host tools: curl, zstd, tar (GNU), gzip, sha256sum, proot.
+"""
 
-WORK=${WORK:-$HERE/work}
-OUT=${OUT:-$HERE/out}
-IMG="$WORK/disk.qcow2"
-PIDF="$WORK/vm.pid"
+import hashlib
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
-# `fetch` pins the exact release into work/release.env; `release.env` in the
-# repo root is the committed fallback so offline builds stay reproducible.
-MIRROR=${MIRROR:-https://geo.mirror.pkgbuild.com}
-ISO_DATE=${ISO_DATE:-latest}
-BOOTSTRAP_SHA=${BOOTSTRAP:-}
-for envf in ./work/release.env ./release.env; do
-    if [ -f "$envf" ]; then
-        # shellcheck disable=SC1090
-        . ./"$envf"
-    fi
-done
+MIRROR_DEFAULT = "https://geo.mirror.pkgbuild.com"
+BOOTSTRAP_FILE = "archlinux-bootstrap-x86_64.tar.zst"
 
-FETCH_DIR="$WORK/arch-bootstrap-$ISO_DATE"
-BOOTSTRAP_TAR="$FETCH_DIR/archlinux-bootstrap-x86_64.tar.zst"
-BOOTSTRAP_DIR="$FETCH_DIR/unpacked"
-BOOTSTRAP_ROOT="$BOOTSTRAP_DIR/root.x86_64"
+HERE = Path(__file__).resolve().parent
+WORK = Path(os.environ.get("WORK", str(HERE / "work")))
+OUT = Path(os.environ.get("OUT", str(HERE / "out")))
+TARGET = WORK / "target"
 
-VMSSHPORT=${VMSSHPORT:-60022}
-ECHO=${ECHO:-1}
+MIRROR = os.environ.get("MIRROR")
+ISO_DATE = os.environ.get("ISO_DATE")
+BOOTSTRAP_SHA = os.environ.get("BOOTSTRAP_SHA")
 
-log()  { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m==> WARNING:\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31m==> ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
-run() {
-    if [ "$ECHO" = 1 ]; then printf '\033[0;36m  %s\033[0m\n' "$*"; fi
-    "$@"
-}
+for envf in (WORK / "release.env", HERE / "release.env"):
+    if envf.is_file():
+        for line in envf.read_text().splitlines():
+            m = re.match(r"^\s*([A-Za-z_]+)=(.*)$", line)
+            if not m:
+                continue
+            key, value = m.groups()
+            if key == "MIRROR" and MIRROR is None:
+                MIRROR = value
+            elif key == "ISO_DATE" and ISO_DATE is None:
+                ISO_DATE = value
+            elif key == "BOOTSTRAP_SHA" and BOOTSTRAP_SHA is None:
+                BOOTSTRAP_SHA = value
 
-need() { command -v "$1" >/dev/null 2>&1 || die "'$1' not found on the host ($2)"; }
-require_host_tools() {
-    need qemu-system-x86_64 "apk add qemu-system-x86_64"
-    need qemu-img           "apk add qemu-img"
-    need zstd               "apk add zstd"
-    need sha256sum          "coreutils"
-    need curl               "apk add curl"
-    need 7z                 "apk add 7zip"
-    need nc                 "apk add opennetcat / netcat-openbsd"
-    need ssh                "apk add openssh-client"
-}
+MIRROR = MIRROR if MIRROR is not None else MIRROR_DEFAULT
+ISO_DATE = ISO_DATE if ISO_DATE is not None else "latest"
 
-# The build VM: the bootstrap rootfs as a virtual disk (virtio, ext4),
-# plus a raw scratch disk (/dev/vdb) the install step pacstraps onto.
-# It boots with init=/bin/bash from the bootstrap and starts a dropbear
-# sshd for the control channel (vm/seed.txt holds the authorized key).
+FETCH_DIR = WORK / f"arch-bootstrap-{ISO_DATE}"
+BOOTSTRAP_TAR = FETCH_DIR / BOOTSTRAP_FILE
+BOOTSTRAP_DIR = FETCH_DIR / "unpacked"
+BOOTSTRAP_ROOT = BOOTSTRAP_DIR / "root.x86_64"
 
-# --- fetch -------------------------------------------------------------------
-bootstrap_info() {
-    # prints "<sha256> <date>" for the bootstrap tarball from the mirror
-    m=$1 d=$2
-    sha=$(curl -fsSL --max-time 60 "$m/iso/$d/sha256sums.txt" | \
-        awk '$2=="archlinux-bootstrap-x86_64.tar.zst" {print $1; exit}')
-    [ -n "$sha" ] || die "no bootstrap checksum listed for $d at $m"
-    printf '%s %s\n' "$sha" "$d"
-}
 
-do_fetch() {
-    mkdir -p "$WORK"
+def log(msg):
+    print(f"\033[1;32m==>\033[0m {msg}", flush=True)
 
-    if [ "$ISO_DATE" = latest ]; then
-        log "Resolving latest Arch release"
-        sha=$(curl -fsSL --max-time 60 "$MIRROR/iso/latest/sha256sums.txt" | \
-            awk '$2=="archlinux-bootstrap-x86_64.tar.zst" {print $1; exit}')
-        [ -n "$sha" ] || die "cannot read $MIRROR/iso/latest/sha256sums.txt"
-        ISO_DATE=$(curl -fsSL --max-time 60 "$MIRROR/iso/latest/sha256sums.txt" | \
-            sed -n 's/^\([0-9a-f]*\)  archlinux-\([0-9.]*\)-x86_64.iso$/\2/p' | head -n1)
-        # ^ date parsed from the ISO line (bootstrap line is undated)
-        [ -n "$ISO_DATE" ] || die "could not parse latest ISO date"
-        # recompute paths for the resolved date
-        FETCH_DIR="$WORK/arch-bootstrap-$ISO_DATE"
-        BOOTSTRAP_TAR="$FETCH_DIR/archlinux-bootstrap-x86_64.tar.zst"
-        BOOTSTRAP_DIR="$FETCH_DIR/unpacked"
-        BOOTSTRAP_ROOT="$BOOTSTRAP_DIR/root.x86_64"
-        mkdir -p "$FETCH_DIR"
-    fi
-    [ -n "$BOOTSTRAP_SHA" ] || BOOTSTRAP_SHA=$(bootstrap_info "$MIRROR" "$ISO_DATE" | cut -d' ' -f1)
 
-    if [ ! -f "$BOOTSTRAP_TAR" ]; then
-        log "Downloading archlinux-bootstrap-$ISO_DATE-x86_64.tar.zst (~40 MB)"
-        run curl -fL --retry 3 -C - -o "$BOOTSTRAP_TAR.part" \
-            "$MIRROR/iso/$ISO_DATE/archlinux-bootstrap-x86_64.tar.zst"
-        mv "$BOOTSTRAP_TAR.part" "$BOOTSTRAP_TAR"
-    else
-        log "Bootstrap tarball already downloaded"
-    fi
+def warn(msg):
+    print(f"\033[1;33m==> WARNING:\033[0m {msg}", file=sys.stderr, flush=True)
 
-    log "Verifying sha256"
-    echo "$BOOTSTRAP_SHA  $BOOTSTRAP_TAR" | sha256sum -c - || die "checksum mismatch"
 
-    log "Pinning release in work/release.env"
-    printf 'MIRROR=%s\nISO_DATE=%s\nBOOTSTRAP_SHA=%s\n' \
-        "$MIRROR" "$ISO_DATE" "$BOOTSTRAP_SHA" > "$WORK/release.env"
-}
+def die(msg):
+    print(f"\033[1;31m==> ERROR:\033[0m {msg}", file=sys.stderr, flush=True)
+    sys.exit(1)
 
-# --- rootfs ------------------------------------------------------------------
-do_rootfs() {
-    [ -f "$BOOTSTRAP_TAR" ] || die "no bootstrap tarball — run './lynx-build fetch' first"
 
-    if [ ! -d "$BOOTSTRAP_ROOT" ]; then
-        log "Unpacking bootstrap rootfs"
-        mkdir -p "$BOOTSTRAP_DIR"
-        # It's a tar (zstd-compressed), not cpio despite the name. Untrusted
-        # data: extraction only, nothing from it executes on the host.
-        # No -p: let umask make dirs owner-writable (a few entries are mode
-        # 0555 dirs whose owner can't write into them otherwise); exact
-        # modes/owners are restored when the result is bundled from the VM.
-        run zstd -dc "$BOOTSTRAP_TAR" | (cd "$BOOTSTRAP_DIR" && tar -xf - \
-            --no-same-owner --no-same-permissions) || true
-    else
-        log "Bootstrap rootfs already unpacked"
-    fi
+def run(cmd, cwd=None, capture=False, quit_on_error=True, msg=None, env=None):
+    shown = " ".join(
+        s if "'" not in s and " " not in s else "'" + str(s).replace("'", "'\\''") + "'"
+        for s in cmd
+    )
+    if msg:
+        shown = f"{msg}: {shown}"
+    print(f"\033[0;36m  {shown}\033[0m", file=sys.stderr, flush=True)
+    try:
+        if capture:
+            r = subprocess.run(
+                [str(c) for c in cmd], cwd=cwd, env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            )
+        else:
+            r = subprocess.run([str(c) for c in cmd], cwd=cwd, env=env)
+    except FileNotFoundError:
+        die(f"'{cmd[0]}' not found on the host")
+    if r.returncode != 0:
+        if capture and r.stdout:
+            print(r.stdout, file=sys.stderr)
+        if quit_on_error:
+            die(f"command failed (rc={r.returncode}): {cmd[0]}")
+    return r
 
-    [ -f "$BOOTSTRAP_ROOT/.lynxos-skel" ] && { log "rootfs ready: $BOOTSTRAP_ROOT"; return 0; }
 
-    log "Applying lynxOS skeleton"
-    run cp -a skel/. "$BOOTSTRAP_ROOT/"
-    run env TARGET="$BOOTSTRAP_ROOT" sh scripts/apply-skel.sh
+def need_tool(name, hint=""):
+    if hint:
+        hint = f" ({hint})"
+    if shutil.which(name) is None:
+        die(f"'{name}' not found on the host{hint}")
 
-    log "Writing lynxOS identity"
-    mkdir -p "$BOOTSTRAP_ROOT/usr/lib"
-    cat > "$BOOTSTRAP_ROOT/usr/lib/os-release" <<EOF
-NAME="lynxOS"
-PRETTY_NAME="lynxOS (Arch Linux base)"
-ID=lynxos
-BUILD_ID=$ISO_DATE
-ANSI_COLOR="1;34"
-HOME_URL="https://github.com/lynxOSX/lynxOS"
-EOF
-    ln -sf /usr/lib/os-release "$BOOTSTRAP_ROOT/etc/os-release"
-    printf 'lynxos build VM (bootstrap)\n' > "$BOOTSTRAP_ROOT/etc/hostname"
 
-    log "Pinning pacman mirror"
-    mkdir -p "$BOOTSTRAP_ROOT/etc/pacman.d"
-    printf 'Server = %s/$repo/os/$arch\n' "$MIRROR" \
-        > "$BOOTSTRAP_ROOT/etc/pacman.d/mirrorlist"
+def require_host_tools():
+    need_tool("curl", "apk add curl")
+    need_tool("sha256sum", "coreutils")
+    need_tool("zstd", "apk add zstd")
+    need_tool("tar", "apk add tar (GNU)")
+    need_tool("gzip", "busybox")
+    need_tool("proot", "apk add proot")
 
-    log "Seeding VM ssh access"
-    mkdir -p "$BOOTSTRAP_ROOT/root/.ssh"
-    # authorized key for the build VM's root (host-key checking is off in
-    # vm_ssh anyway; this seed is for *authorized* keys)
-    [ -f "$WORK/vm_key" ] || run ssh-keygen -q -t ed25519 -N '' -f "$WORK/vm_key"
-    cp "$WORK/vm_key.pub" "$BOOTSTRAP_ROOT/root/.ssh/authorized_keys"
-    chmod 700 "$BOOTSTRAP_ROOT/root/.ssh"
-    chmod 600 "$BOOTSTRAP_ROOT/root/.ssh/authorized_keys"
 
-    touch "$BOOTSTRAP_ROOT/.lynxos-skel"
-    log "Rootfs ready: $BOOTSTRAP_ROOT"
-}
+def package_list():
+    pkgs = []
+    for line in (HERE / "packages.txt").read_text().splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            pkgs.append(stripped)
+    return pkgs
 
-# --- build VM ----------------------------------------------------------------
-# Convert the bootstrap rootfs into a raw ext4 image usable as a VM disk.
-# A file called lynx-build-vm-signal (or any file) in / signals readiness.
-make_disk_image() {
-    require_host_tools
-    [ -d "$BOOTSTRAP_ROOT" ] || die "no rootfs — run './lynx-build rootfs' first"
-    [ -f "$IMG" ] && { log "Disk image already exists"; return 0; }
 
-    log "Creating build VM disk (raw ext4, 2G)"
-    tmp="$WORK/disk.qcow2.raw"
-    truncate -s 2G "$tmp"
-    run mkfs.ext4 -q -F -L lynxvm "$tmp"
+def default_env():
+    return {
+        "HOME": "/root",
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "TERM": os.environ.get("TERM", "dumb"),
+    }
 
-    log "Copying rootfs into the disk image"
-    mnt="$WORK/mnt"
-    run mkdir -p "$mnt"
-    run mount -o loop "$tmp" "$mnt"
-    trap 'umount "$mnt" 2>/dev/null || true; rm -f "$tmp.tmp"' EXIT
-    # use as-root cp because we need root ownership inside the image
-    # (alpine: doas/sudo available in most setups; fail loudly otherwise)
-    copy="cp -a $BOOTSTRAP_ROOT/. $mnt/"
-    if [ "$(id -u)" = 0 ]; then run $copy
-    elif command -v doas >/dev/null; then run doas $copy
-    elif command -v sudo >/dev/null; then run sudo $copy
-    else die "need root to populate the disk image (run as root, or install doas/sudo)"
-    fi
-    run umount "$mnt"
-    trap - EXIT
-    mv "$tmp" "$IMG.raw"
-    # qemu can boot raw directly; keep .raw
-    rm -f "$IMG"
-    IMG="$IMG.raw"  # not used further; left for clarity
-}
 
-# Boot the VM. The init inside comes from the bootstrap image: we pass
-# init=/bin/bash style entry via -append (kernel extracted from the ISO's
-# bootloader config; the bootstrap rootfs has /boot? no — see vm/ for the
-# kernel). Simplest robust path: boot the ISO, but point its live system at
-# our rootfs... (see docs/PLAN.md for the final approach)
-vm_start() {
-    require_host_tools
-    [ -f "$IMG.raw" ] || make_disk_image
-    [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null && { log "VM already running"; return 0; }
-    mkdir -p "$WORK"
-    VMSSHPORT=${VMSSHPORT:-60022}
-    log "Starting build VM (ssh on 127.0.0.1:$VMSSHPORT)"
-    run qemu-system-x86_64 \
-        -machine q35 -cpu max -smp "${VMCPUS:-2}" -m "${MEMORY:-1G}" \
-        -drive file="$IMG.raw",format=raw,if=virtio \
-        -netdev user,id=n1,hostfwd=tcp:127.0.0.1:$VMSSHPORT-:22 \
-        -device virtio-net-pci,netdev=n1 \
-        -display none -daemonize -pidfile "$PIDF" \
-        -serial "file:$WORK/vm-console.log"
-    vm_wait_ssh
-}
+def in_bootstrap(args, extra_binds=()):
+    cmd = ["proot", "-0", "-R", str(BOOTSTRAP_ROOT), "-w", "/"]
+    for host, guest in extra_binds:
+        cmd += ["-b", f"{host}:{guest}"]
+    return run(cmd + list(args), env=default_env())
 
-vm_wait_ssh() {
-    log "Waiting for ssh on port $VMSSHPORT"
-    i=0
-    while [ $i -lt 90 ]; do
-        if nc -z 127.0.0.1 "$VMSSHPORT" 2>/dev/null; then return 0; fi
-        i=$((i+1)); sleep 1
-    done
-    die "VM ssh not up after 90s — see $WORK/vm-console.log"
-}
 
-vm_ssh() {
-    run ssh -p "$VMSSHPORT" \
-        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        -o ConnectTimeout=10 \
-        -i "$WORK/vm_key" root@127.0.0.1 "$@"
-}
+def pin_mirror(root):
+    mlist_dir = Path(root) / "etc" / "pacman.d"
+    mlist_dir.mkdir(parents=True, exist_ok=True)
+    (mlist_dir / "mirrorlist").write_text(
+        f"Server = {MIRROR}/$repo/os/$arch\n"
+    )
 
-# --- install / bundle ----------------------------------------------------------
-do_install() {
-    die "'install' is not implemented yet — the build-VM boot flow is being
-         finished; see docs/PLAN.md for the design and next steps."
-}
 
-do_bundle() {
-    die "'bundle' is not implemented yet — it needs 'install' first."
-}
+def do_fetch():
+    global FETCH_DIR, BOOTSTRAP_TAR, BOOTSTRAP_DIR, BOOTSTRAP_ROOT
+    global ISO_DATE, BOOTSTRAP_SHA
+    WORK.mkdir(parents=True, exist_ok=True)
+    resolved_date = ISO_DATE
+    if ISO_DATE == "latest":
+        log("Resolving latest Arch release")
+        sums = run(
+            ["curl", "-fsSL", "--max-time", "60",
+             f"{MIRROR}/iso/latest/sha256sums.txt"],
+            capture=True, msg="reading latest checksums",
+        ).stdout
+        sha = date = None
+        for line in sums.splitlines():
+            parts = line.split()
+            if len(parts) != 2:
+                continue
+            digest, name = parts
+            if name == BOOTSTRAP_FILE:
+                sha = digest
+            m = re.match(r"^archlinux-([0-9.]+)-x86_64\.iso$", name)
+            if m:
+                date = m.group(1)
+        if not date or not sha:
+            die(f"could not parse the latest release from "
+                f"{MIRROR}/iso/latest/sha256sums.txt")
+        resolved_date, pinned_sha = date, sha
+    else:
+        if not BOOTSTRAP_SHA:
+            r = run(
+                ["curl", "-fsSL", "--max-time", "60",
+                 f"{MIRROR}/iso/{ISO_DATE}/sha256sums.txt"],
+                capture=True,
+            )
+            match = re.search(
+                r"^([0-9a-f]{64})\s+" + re.escape(BOOTSTRAP_FILE) + r"$",
+                r.stdout, re.M,
+            )
+            pinned_sha = match.group(1) if match else None
+            if not pinned_sha:
+                die(f"no bootstrap checksum listed for {ISO_DATE} at {MIRROR}")
+        else:
+            pinned_sha = BOOTSTRAP_SHA
 
-# --- main ----------------------------------------------------------------------
-case ${1:-} in
-    fetch)    do_fetch ;;
-    rootfs)   do_rootfs ;;
-    vm-up)    vm_start ;;
-    vm-down)  [ -f "$PIDF" ] && { run kill "$(cat "$PIDF")"; rm -f "$PIDF"; } || log "VM not running" ;;
-    vm)       shift; vm_start; vm_ssh "$@" ;;
-    install)  do_install ;;
-    bundle)   do_bundle ;;
-    all)      do_fetch; do_rootfs; do_install; do_bundle ;;
-    clean)    [ -f "$PIDF" ] && kill "$(cat "$PIDF")" 2>/dev/null || true
-              rm -rf "$WORK" ;;
-    *)        sed -n '1,30p' "$0"; exit 1 ;;
-esac
+    FETCH_DIR = WORK / f"arch-bootstrap-{resolved_date}"
+    BOOTSTRAP_TAR = FETCH_DIR / BOOTSTRAP_FILE
+    BOOTSTRAP_DIR = FETCH_DIR / "unpacked"
+    BOOTSTRAP_ROOT = BOOTSTRAP_DIR / "root.x86_64"
+    FETCH_DIR.mkdir(parents=True, exist_ok=True)
+
+    if not BOOTSTRAP_TAR.is_file():
+        log(f"Downloading {BOOTSTRAP_FILE} ({resolved_date}, ~40 MB)")
+        run(["curl", "-fL", "--retry", "3", "-C", "-", "-o",
+             str(BOOTSTRAP_TAR) + ".part",
+             f"{MIRROR}/iso/{resolved_date}/{BOOTSTRAP_FILE}"])
+        (Path(str(BOOTSTRAP_TAR) + ".part")).replace(BOOTSTRAP_TAR)
+    else:
+        log("Bootstrap tarball already downloaded")
+
+    log("Verifying sha256")
+    digest = hashlib.sha256(BOOTSTRAP_TAR.read_bytes()).hexdigest()
+    if digest != pinned_sha:
+        die(f"checksum mismatch for {BOOTSTRAP_TAR}\n"
+            f"  expected {pinned_sha}\n  found   {digest}")
+
+    ISO_DATE = resolved_date
+    BOOTSTRAP_SHA = pinned_sha
+    (WORK / "release.env").write_text(
+        f"MIRROR={MIRROR}\nISO_DATE={ISO_DATE}\nBOOTSTRAP_SHA={BOOTSTRAP_SHA}\n"
+    )
+
+
+def do_rootfs():
+    require_host_tools()
+    if not BOOTSTRAP_TAR.is_file():
+        die(f"no bootstrap tarball ({BOOTSTRAP_TAR}) — run './lynx-build fetch' first")
+    if not BOOTSTRAP_ROOT.is_dir():
+        log("Unpacking bootstrap rootfs")
+        if BOOTSTRAP_DIR.exists():
+            shutil.rmtree(BOOTSTRAP_DIR)
+        BOOTSTRAP_DIR.mkdir(parents=True)
+        zstd = subprocess.Popen(
+            ["zstd", "-dc", str(BOOTSTRAP_TAR)], stdout=subprocess.PIPE
+        )
+        tar = subprocess.Popen(
+            ["tar", "-xf", "-", "--no-same-owner", "--delay-directory-restore",
+             "--warning=no-unknown-keyword"],
+            cwd=str(BOOTSTRAP_DIR), stdin=zstd.stdout,
+        )
+        zstd.stdout.close()
+        rc_zstd = zstd.wait()
+        rc_tar = tar.wait()
+        if rc_tar != 0:
+            die(f"tar failed while unpacking the bootstrap (rc={rc_tar})")
+        if rc_zstd != 0:
+            die(f"zstd failed while unpacking the bootstrap (rc={rc_zstd})")
+        run(["chmod", "-R", "u+w", str(BOOTSTRAP_ROOT)])
+    else:
+        log("Bootstrap rootfs already unpacked")
+
+    if not (BOOTSTRAP_ROOT / "usr/bin/pacman").is_file():
+        die(f"bootstrap rootfs looks broken (no /usr/bin/pacman in {BOOTSTRAP_ROOT})")
+    if not (BOOTSTRAP_ROOT / "etc/pacman.d/gnupg/trustdb.gpg").is_file():
+        warn("bootstrap keyring missing; pacman signatures will fail until "
+             "pacman-key is run inside the bootstrap")
+
+    log("Pinning pacman mirror in bootstrap")
+    pin_mirror(BOOTSTRAP_ROOT)
+    log(f"Bootstrap ready: {BOOTSTRAP_ROOT}")
+
+
+def build_pacman_conf():
+    conf = BOOTSTRAP_ROOT / "etc" / "pacman.conf"
+    text = conf.read_text()
+    out = []
+    for line in text.splitlines():
+        if line.startswith("DownloadUser"):
+            out.append("#" + line)
+        elif line.startswith("#DisableSandboxFilesystem"):
+            out.append(line[1:])
+        elif line.startswith("#DisableSandboxSyscalls"):
+            out.append(line[1:])
+        else:
+            out.append(line)
+    newconf = BOOTSTRAP_ROOT / "etc" / "pacman.conf.lynxbuild"
+    newconf.write_text("\n".join(out) + "\n")
+    return "/etc/pacman.conf.lynxbuild"
+
+
+def build_keyring(dest_root):
+    """Populate dest_root/etc/pacman.d/gnupg with a working pacman keyring.
+
+    The bootstrap tarball ships no /etc/pacman.d/gnupg and pacman-key cannot
+    run under proot (gpg-agent hangs waiting on sockets, and gpg refuses a
+    homedir owned by another uid), so the keyring is built on the host with
+    the host's gpg:
+      - import the full Arch keyring (usr/share/pacman/keyrings/archlinux.gpg)
+      - mark every key in archlinux-trusted owner-ultimate (:6:) so the web
+        of trust resolves for package signatures
+    """
+    need_tool("gpg", "apk add gnupg")
+    keyrings = BOOTSTRAP_ROOT / "usr" / "share" / "pacman" / "keyrings"
+    for f in (keyrings / "archlinux.gpg", keyrings / "archlinux-trusted"):
+        if not f.is_file():
+            die(f"missing keyring file in bootstrap: {f}")
+
+    tmp = WORK / "gnupg"
+    tmp.mkdir(parents=True, exist_ok=True)
+    os.chmod(tmp, 0o700)
+    genv = dict(os.environ, GNUPGHOME=str(tmp))
+    if not (tmp / "pubring.kbx").is_file():
+        log("Building pacman keyring on the host (one-time)")
+        run(["gpg", "--batch", "--quiet", "--import", str(keyrings / "archlinux.gpg")],
+            env=genv, msg="importing archlinux.gpg")
+        trusted = (keyrings / "archlinux-trusted").read_text().replace(":4:", ":6:")
+        (tmp / "ownertrust").write_text(trusted)
+        run(["gpg", "--batch", "--quiet", "--import-ownertrust",
+             str(tmp / "ownertrust")], env=genv, msg="setting owner trust")
+        run(["gpg", "--batch", "--quiet", "--list-keys"],
+            env=genv, msg="computing trustdb",
+            quit_on_error=False)
+
+    dst = Path(dest_root) / "etc" / "pacman.d" / "gnupg"
+    if dst.exists():
+        shutil.rmtree(dst)
+    dst.mkdir(parents=True)
+    for name in ("pubring.kbx", "trustdb.gpg"):
+        shutil.copy2(tmp / name, dst / name)
+    os.chmod(dst, 0o700)
+    for f in dst.iterdir():
+        f.chmod(0o600 if not f.is_dir() else 0o700)
+
+
+def do_skel_dirs():
+    pkg = {
+        "root": "x:0:0:root:/:/bin/sh",
+        "alpm": "x:970:970:Arch Linux Package Management:/:/usr/bin/nologin",
+    }
+    etc = TARGET / "etc"
+    etc.mkdir(parents=True, exist_ok=True)
+    for name, entry in pkg.items():
+        (etc / "passwd").touch()
+        content = (etc / "passwd").read_text()
+        if f"\n{name}:" not in "\n" + content and not content.startswith(name + ":"):
+            with open(etc / "passwd", "a") as f:
+                f.write(f"{name}:{entry}\n")
+        (etc / "group").touch()
+        gcontent = (etc / "group").read_text()
+        if f"\n{name}:" not in "\n" + gcontent and not gcontent.startswith(name + ":"):
+            with open(etc / "group", "a") as f:
+                f.write(f"{name}:x:{'0' if name == 'root' else '970'}:\n")
+
+
+def do_install():
+    require_host_tools()
+    if not BOOTSTRAP_ROOT.is_dir():
+        die("no bootstrap rootfs — run './lynx-build rootfs' first")
+    if not (BOOTSTRAP_ROOT / "usr/bin/pacman").is_file():
+        die("bootstrap rootfs looks broken (no /usr/bin/pacman)")
+    if TARGET.exists():
+        die(f"{TARGET} already exists — run './lynx-build clean' to restart")
+    pkgs = package_list()
+    if not pkgs:
+        die("packages.txt is empty")
+
+    TARGET.mkdir(parents=True)
+    (TARGET / "var" / "lib" / "pacman").mkdir(parents=True, exist_ok=True)
+    do_skel_dirs()
+
+    log("Preparing pacman keyring (host-built, into bootstrap)")
+    build_keyring(BOOTSTRAP_ROOT)
+    log("Copying pacman keyring into target")
+    build_keyring(TARGET)
+
+    build_conf = build_pacman_conf()
+    log(f"Installing package set into {TARGET} ({len(pkgs)} packages)")
+    in_bootstrap([
+        "pacman",
+        "--config", build_conf,
+        "-Sy", "--needed", "--noconfirm",
+        "-r", "/target",
+        *pkgs,
+    ], extra_binds=[(TARGET, "/target")])
+
+    log("Applying lynxOS skeleton")
+    skel = HERE / "skel"
+    if skel.is_dir():
+        run(["cp", "-a", str(skel) + "/.", str(TARGET) + "/"])
+    else:
+        warn("no skel/ directory — apply-skel.sh provides the skeleton for now")
+    run(["sh", str(HERE / "scripts" / "apply-skel.sh")],
+        env={**os.environ, "TARGET": str(TARGET)})
+
+    log("Writing lynxOS identity")
+    rdir = TARGET / "usr" / "lib"
+    rdir.mkdir(parents=True, exist_ok=True)
+    (rdir / "os-release").write_text(
+        "NAME=\"lynxOS\"\n"
+        "PRETTY_NAME=\"lynxOS (Arch Linux base)\"\n"
+        "ID=lynxos\n"
+        f"BUILD_ID={ISO_DATE}\n"
+        "ANSI_COLOR=\"1;34\"\n"
+        "HOME_URL=\"https://github.com/lynxOSX/lynxOS\"\n"
+    )
+    rel = TARGET / "etc" / "os-release"
+    if rel.is_symlink() or rel.exists():
+        rel.unlink()
+    rel.symlink_to("/usr/lib/os-release")
+    (TARGET / "etc" / "hostname").write_text("lynxos\n")
+
+    log("Pinning pacman mirror in target")
+    pin_mirror(TARGET)
+
+    btgt = TARGET / "usr" / "bin" / "pacman"
+    if not btgt.exists():
+        die("install failed: pacman missing from the target rootfs")
+    run(["chmod", "-R", "u+rwX", str(TARGET)])
+    log(f"Install complete: {TARGET}")
+
+
+def do_bundle():
+    require_host_tools()
+    if not (TARGET / "usr/lib/os-release").is_file():
+        die("no installed rootfs — run './lynx-build install' first")
+    run(["chmod", "-R", "u+rwX", str(TARGET)], msg="widening perms")
+    OUT.mkdir(parents=True, exist_ok=True)
+    name = f"lynxos-rootfs-{ISO_DATE}-x86_64.tar.gz"
+    tar_flags = [
+        "--numeric-owner", "--sort=name", "--owner=0:0", "--group=0:0",
+        "--mtime=1970-01-01 00:00:00 UTC",
+    ]
+    build = out_path = OUT / name
+    tmp = OUT / (name + ".tmp")
+    log(f"Bundling {TARGET}")
+    run(["tar", *tar_flags, "-C", str(TARGET), "-czf", str(tmp), "."])
+    tmp.replace(build)
+    size = build.stat().st_size
+    log(f"Wrote {build} ({size / (1 << 20):.1f} MiB)")
+
+    digest = hashlib.sha256(build.read_bytes()).hexdigest()
+    log(f"sha256 {digest}")
+
+    verify = OUT / (name + ".verify")
+    log("Verifying reproducibility (second pass)")
+    run(["tar", *tar_flags, "-C", str(TARGET), "-czf", str(verify), "."])
+    second = hashlib.sha256(verify.read_bytes()).hexdigest()
+    verify.unlink()
+    if second != digest:
+        die(f"bundle is not reproducible: {digest} != {second}")
+    log("Reproducible: two passes produced identical bytes")
+
+
+def do_clean():
+    stash = Path(str(WORK) + ".stash")
+    stash.mkdir(parents=True, exist_ok=True)
+    if BOOTSTRAP_TAR.is_file():
+        shutil.move(str(BOOTSTRAP_TAR), str(stash / BOOTSTRAP_FILE))
+    if (WORK / "release.env").is_file():
+        shutil.move(str(WORK / "release.env"), str(stash / "release.env"))
+    if WORK.is_dir():
+        run(["chmod", "-R", "u+rwX", str(WORK)], quit_on_error=False)
+        shutil.rmtree(WORK)
+    WORK.mkdir(parents=True, exist_ok=True)
+    fetch_dir = WORK / f"arch-bootstrap-{ISO_DATE}"
+    fetch_dir.mkdir(parents=True, exist_ok=True)
+    if (stash / BOOTSTRAP_FILE).is_file():
+        shutil.move(str(stash / BOOTSTRAP_FILE), str(BOOTSTRAP_TAR))
+    if (stash / "release.env").is_file():
+        shutil.move(str(stash / "release.env"), str(WORK / "release.env"))
+    try:
+        stash.rmdir()
+    except OSError:
+        pass
+    OUT.mkdir(parents=True, exist_ok=True)
+
+
+def main():
+    if len(sys.argv) != 2 or sys.argv[1] in ("-h", "--help"):
+        print(__doc__.strip())
+        sys.exit(0 if len(sys.argv) == 2 else 2)
+    step = sys.argv[1]
+    steps = {
+        "fetch": do_fetch,
+        "rootfs": do_rootfs,
+        "install": do_install,
+        "bundle": do_bundle,
+        "clean": do_clean,
+    }
+    if step == "all":
+        for s in ("fetch", "rootfs", "install", "bundle"):
+            log(s)
+            steps[s]()
+        return
+    if step not in steps:
+        die(f"unknown step '{step}' — try fetch|rootfs|install|bundle|all|clean")
+    steps[step]()
+
+
+if __name__ == "__main__":
+    main()
