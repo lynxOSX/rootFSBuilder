@@ -31,4 +31,12 @@ ln -sfn home "$T/Users"
 #   MyApp.app/Contents/Info.json
 #   MyApp.app/Contents/Resources/
 #   MyApp.app/Contents/lynxOS/MyApp        (the executable)
+
+# lynxOS system icon theme — raster <res>x<res>/<category>/<name>.png, the
+# layout apps resolve by path (AppKit alerts, …); no QIcon anywhere.
+ICON_SRC="$(cd "$(dirname "$0")/icons" && pwd)"
+if [ -d "$ICON_SRC/lynx" ]; then
+    mkdir -p "$T/usr/share/icons"
+    cp -R "$ICON_SRC/lynx" "$T/usr/share/icons/lynx"
+fi
 # (no example bundle yet — the format lands with the first lynxOS app)

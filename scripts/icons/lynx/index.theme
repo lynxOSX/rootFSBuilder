@@ -1,0 +1,20 @@
+[Icon Theme]
+Name=lynx
+Comment=lynxOS system icons (10.6-style raster art)
+Directories=32x32/status,48x48/status
+
+# Apps resolve icons by path — /usr/share/icons/<theme>/<NxN>/<cat>/<name>.png
+# (AppKit never goes through QIcon). Drawn in SOURCE-caution.svg; re-render
+# after editing:
+#   magick -background none SOURCE-caution.svg -resize 48x48 48x48/status/dialog-warning.png
+#   magick -background none SOURCE-caution.svg -resize 32x32 32x32/status/dialog-warning.png
+
+[32x32/status]
+Size=32
+Context=Status
+Type=Threshold
+
+[48x48/status]
+Size=48
+Context=Status
+Type=Threshold

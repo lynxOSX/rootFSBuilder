@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- lynxOS system icon art — caution triangle (dialog-warning), 10.6 style.
+     Render to the raster sizes with ImageMagick:
+       magick -background none SOURCE-caution.svg -resize 48x48 48x48/status/dialog-warning.png
+       magick -background none SOURCE-caution.svg -resize 32x32 32x32/status/dialog-warning.png -->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- rounded triangle: round-join stroke fattens the fill and rounds
+       the corners; a second, slightly larger stroke draws the outline -->
+  <polygon points="64,14 116,104 12,104"
+           fill="#fee08a" stroke="#c9971d" stroke-width="14"
+           stroke-linejoin="round"/>
+  <polygon points="64,14 116,104 12,104"
+           fill="#ffcb3d" stroke="#ffcb3d" stroke-width="10"
+           stroke-linejoin="round"/>
+  <polygon points="64,26 106,100 22,100"
+           fill="#ffd95e" stroke="none"/>
+  <!-- the exclamation -->
+  <rect x="58.5" y="44" width="11" height="36" rx="5.5" fill="#4c4334"/>
+  <circle cx="64" cy="93" r="6.5" fill="#4c4334"/>
+</svg>
