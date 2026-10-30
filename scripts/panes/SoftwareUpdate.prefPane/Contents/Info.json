@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Software Update",
+  "CFBundleIdentifier": "org.lynxos.panes.softwareupdate",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "SoftwareUpdate",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "System",
+  "NSPrefPaneIconFile": "SoftwareUpdate.png",
+  "NSPrefPaneRequiresLibrary": false
+}

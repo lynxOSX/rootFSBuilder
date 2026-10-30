@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Spotlight",
+  "CFBundleIdentifier": "org.lynxos.panes.spotlight",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "Spotlight",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "Personal",
+  "NSPrefPaneIconFile": "Spotlight.png",
+  "NSPrefPaneRequiresLibrary": false
+}

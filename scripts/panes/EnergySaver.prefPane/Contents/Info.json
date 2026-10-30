@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Energy Saver",
+  "CFBundleIdentifier": "org.lynxos.panes.energysaver",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "EnergySaver",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "Hardware",
+  "NSPrefPaneIconFile": "EnergySaver.png",
+  "NSPrefPaneRequiresLibrary": false
+}

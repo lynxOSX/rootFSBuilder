@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Language & Text",
+  "CFBundleIdentifier": "org.lynxos.panes.localization",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "Localization",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "Personal",
+  "NSPrefPaneIconFile": "Localization.png",
+  "NSPrefPaneRequiresLibrary": false
+}

@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "VoodooHDA",
+  "CFBundleIdentifier": "org.lynxos.panes.voodoohda",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "VoodooHDA",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "Other",
+  "NSPrefPaneIconFile": "VoodooHDA.png",
+  "NSPrefPaneRequiresLibrary": false
+}

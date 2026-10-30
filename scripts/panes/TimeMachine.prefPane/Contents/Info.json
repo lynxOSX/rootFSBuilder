@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Time Machine",
+  "CFBundleIdentifier": "org.lynxos.panes.timemachine",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "TimeMachine",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "System",
+  "NSPrefPaneIconFile": "TimeMachine.png",
+  "NSPrefPaneRequiresLibrary": false
+}

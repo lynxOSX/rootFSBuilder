@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Ink",
+  "CFBundleIdentifier": "org.lynxos.panes.ink",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "Ink",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "Hardware",
+  "NSPrefPaneIconFile": "Ink.png",
+  "NSPrefPaneRequiresLibrary": false
+}

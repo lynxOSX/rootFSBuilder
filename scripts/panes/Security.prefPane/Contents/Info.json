@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Security",
+  "CFBundleIdentifier": "org.lynxos.panes.security",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "Security",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "Personal",
+  "NSPrefPaneIconFile": "Security.png",
+  "NSPrefPaneRequiresLibrary": false
+}

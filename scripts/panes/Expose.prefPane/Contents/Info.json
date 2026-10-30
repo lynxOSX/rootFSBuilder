@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Expos\u00e9 & Spaces",
+  "CFBundleIdentifier": "org.lynxos.panes.expose",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "Expose",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "Personal",
+  "NSPrefPaneIconFile": "Expose.png",
+  "NSPrefPaneRequiresLibrary": false
+}

@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Mouse",
+  "CFBundleIdentifier": "org.lynxos.panes.mouse",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "Mouse",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "Hardware",
+  "NSPrefPaneIconFile": "Mouse.png",
+  "NSPrefPaneRequiresLibrary": false
+}

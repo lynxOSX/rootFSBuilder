@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Desktop & Screen Saver",
+  "CFBundleIdentifier": "org.lynxos.panes.desktopscreeneffectspref",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "DesktopScreenEffectsPref",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "Personal",
+  "NSPrefPaneIconFile": "DesktopScreenEffectsPref.png",
+  "NSPrefPaneRequiresLibrary": false
+}

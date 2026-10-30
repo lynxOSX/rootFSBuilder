@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Keyboard",
+  "CFBundleIdentifier": "org.lynxos.panes.keyboard",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "Keyboard",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "Hardware",
+  "NSPrefPaneIconFile": "Keyboard.png",
+  "NSPrefPaneRequiresLibrary": false
+}

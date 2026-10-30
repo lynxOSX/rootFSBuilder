@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Date & Time",
+  "CFBundleIdentifier": "org.lynxos.panes.dateandtime",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "DateAndTime",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "System",
+  "NSPrefPaneIconFile": "DateAndTime.png",
+  "NSPrefPaneRequiresLibrary": false
+}

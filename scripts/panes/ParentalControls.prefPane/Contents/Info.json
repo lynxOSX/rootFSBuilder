@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Parental Controls",
+  "CFBundleIdentifier": "org.lynxos.panes.parentalcontrols",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "ParentalControls",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "System",
+  "NSPrefPaneIconFile": "ParentalControls.png",
+  "NSPrefPaneRequiresLibrary": false
+}

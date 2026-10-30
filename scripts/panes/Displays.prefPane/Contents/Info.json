@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Displays",
+  "CFBundleIdentifier": "org.lynxos.panes.displays",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "Displays",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "Hardware",
+  "NSPrefPaneIconFile": "Displays.png",
+  "NSPrefPaneRequiresLibrary": false
+}

@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Startup Disk",
+  "CFBundleIdentifier": "org.lynxos.panes.startupdisk",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "StartupDisk",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "System",
+  "NSPrefPaneIconFile": "StartupDisk.png",
+  "NSPrefPaneRequiresLibrary": false
+}

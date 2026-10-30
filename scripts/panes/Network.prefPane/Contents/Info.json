@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Network",
+  "CFBundleIdentifier": "org.lynxos.panes.network",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "Network",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "Internet & Wireless",
+  "NSPrefPaneIconFile": "Network.png",
+  "NSPrefPaneRequiresLibrary": false
+}

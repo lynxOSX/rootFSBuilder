@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Speech",
+  "CFBundleIdentifier": "org.lynxos.panes.speech",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "Speech",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "System",
+  "NSPrefPaneIconFile": "Speech.png",
+  "NSPrefPaneRequiresLibrary": false
+}

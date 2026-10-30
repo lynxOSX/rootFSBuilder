@@ -19,6 +19,10 @@ xorg-xinit
 openbox
 xterm
 
+# compositor — ARGB windows (the WM's window shadows, dock reflections,
+# translucency) render solid black without one
+picom
+
 # Console basics
 nano
 less

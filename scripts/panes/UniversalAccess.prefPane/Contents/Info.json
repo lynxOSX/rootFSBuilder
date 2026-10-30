@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Universal Access",
+  "CFBundleIdentifier": "org.lynxos.panes.universalaccess",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "UniversalAccess",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "System",
+  "NSPrefPaneIconFile": "UniversalAccess.png",
+  "NSPrefPaneRequiresLibrary": false
+}

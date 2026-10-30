@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Sharing",
+  "CFBundleIdentifier": "org.lynxos.panes.sharing",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "Sharing",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "Internet & Wireless",
+  "NSPrefPaneIconFile": "Sharing.png",
+  "NSPrefPaneRequiresLibrary": false
+}

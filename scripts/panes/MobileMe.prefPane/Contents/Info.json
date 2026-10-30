@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "MobileMe",
+  "CFBundleIdentifier": "org.lynxos.panes.mobileme",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "MobileMe",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "Internet & Wireless",
+  "NSPrefPaneIconFile": "MobileMe.png",
+  "NSPrefPaneRequiresLibrary": false
+}

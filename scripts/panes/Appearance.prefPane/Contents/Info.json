@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Appearance",
+  "CFBundleIdentifier": "org.lynxos.panes.appearance",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "Appearance",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "Personal",
+  "NSPrefPaneIconFile": "Appearance.png",
+  "NSPrefPaneRequiresLibrary": false
+}

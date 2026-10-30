@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "CDs & DVDs",
+  "CFBundleIdentifier": "org.lynxos.panes.cddvd",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "CDDVD",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "Hardware",
+  "NSPrefPaneIconFile": "CDDVD.png",
+  "NSPrefPaneRequiresLibrary": false
+}

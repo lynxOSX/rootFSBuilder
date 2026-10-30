@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Sound",
+  "CFBundleIdentifier": "org.lynxos.panes.sound",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "Sound",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "Hardware",
+  "NSPrefPaneIconFile": "Sound.png",
+  "NSPrefPaneRequiresLibrary": false
+}

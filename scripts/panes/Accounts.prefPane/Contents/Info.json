@@ -1,0 +1,11 @@
+{
+  "CFBundleDisplayName": "Accounts",
+  "CFBundleIdentifier": "org.lynxos.panes.accounts",
+  "CFBundleInfoDictionaryVersion": "6.0",
+  "CFBundleName": "Accounts",
+  "CFBundlePackageType": "BNDL",
+  "NSApplicationDescription": "A placeholder System Preferences pane.",
+  "NSPrefPaneCategory": "System",
+  "NSPrefPaneIconFile": "Accounts.png",
+  "NSPrefPaneRequiresLibrary": false
+}
